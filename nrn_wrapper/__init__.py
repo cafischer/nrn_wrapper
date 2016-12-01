@@ -3,7 +3,6 @@ from neuron import nrn, h
 import json
 import numpy as np
 import sys
-from utilities import isfloat
 h.load_file("stdrun.hoc")  # load Neuron run libraries
 
 __author__ = 'caro'
@@ -339,7 +338,7 @@ class Cell(object):
     def __get_attr_tmp(var, key):
         if key.isdigit():  # should be the index of the section
             return var[int(key)]
-        elif isfloat(key):  # should be pos applied to section
+        elif is_float(key):  # should be pos applied to section
             return var(float(key))
         else:
             return getattr(var, key)
@@ -381,6 +380,21 @@ class Cell(object):
         else:
             return getattr(self, name)[index]
 
+    def insert_mechanisms(self, path_variables):
+        """
+        Given a list of paths for some variables. The method will pick out the mechanisms and insert them into the cell
+        whereas other variables are ignored.
+        :param path_variables: List of paths to some variables.
+        :type path_variables: list
+        """
+        try:
+            for paths in path_variables:
+                for path in paths:
+                    self.get_attr(path[:-3]).insert(path[-2])  # [-3]: pos (not needed insert into section)
+                    # [-2]: mechanism, [-1]: attribute
+        except AttributeError:
+            pass  # let all non mechanism variables pass
+
     def get_dict(self, geom_type='stylized'):
         cell_dict = dict()
 
@@ -400,7 +414,7 @@ class Cell(object):
 
 
 def load_mechanism_dir(mechanism_dir):
-    h.nrn_load_dll(complete_mechanismdir(mechanism_dir))
+    h.nrn_load_dll(complete_mechanismdir(str(mechanism_dir)))
 
 
 def complete_mechanismdir(mechanism_dir):
@@ -479,15 +493,28 @@ def vclamp(v, t, sec, celsius):
     h.run()
 
 
+def is_float(string):
+    try:
+        float(string)
+        return True
+    except ValueError:
+        return False
+
+
 if __name__ == "__main__":
 
     # create Section
-    soma = Section('soma', None, geom={'L':30, 'diam':30}, mechanisms={'pas': {'0.5': {}}})
+    soma = Section('soma', None, geom={'L': 30, 'diam': 30}, mechanisms={'pas': {'0.5': {'g_pas': 0.07462712}}})
 
-    # create Cell
-    cell = Cell({"soma": {
+    # load mechanisms
+    load_mechanism_dir('./demo/channels/')
+
+    # create cell
+    cell = Cell(
+        {"soma": {
                         "mechanisms": {
-                            "pas": {"0.5": {}}
+                            "nat": {"0.5": {"gbar": 0.05}},
+                            "pas": {"0.5": {"g_pas": 0.001}}
                           },
                         "geom": {
                             "diam": 15,
@@ -496,19 +523,33 @@ if __name__ == "__main__":
                         "Ra": 100.0,
                         "cm": 1.0,
                         "nseg": 1
-                    }})
+                },
+                "dendrites": {
+                    "0": {
+                        "mechanisms": {
+                            "pas": {"0.5": {"g_pas": 0.001}}
+                        },
+                        "geom": {
+                            "diam": 1,
+                            "L": 100
+                        },
+                        "Ra": 100.0,
+                        "cm": 1.0,
+                        "nseg": 1,
+                        "parent": ["soma", None],
+                        "connection_point": 1.0
+                    }
+                }
+        }
+    )
 
     # update and get attribute
-    cell.update_attr(['dendrites', '0', '0.5', 'pas', 'g'], 0.001)
-
-    print cell.get_attr(['dendrites', '0', '0.5', 'pas', 'g'])
-
-    # load cell from modeldir
-    cell = Cell.from_modeldir('./cells/test_cell.json', complete_mechanismdir('./fitted_channels/'))
+    cell.update_attr(['soma', '0.5', 'nat', 'gbar'], 0.1)
+    nat_gbar = cell.get_attr(['soma', '0.5', 'nat', 'gbar'])
 
     # save cell
-    with open('./cells/test_cell.json', 'w') as f:
+    with open('./demo/test_cell.json', 'w') as f:
         json.dump(cell.get_dict(), f, indent=4)
 
     # reload saved cell
-    cell = Cell.from_modeldir('./test_cell_new.json')
+    cell = Cell.from_modeldir('./demo/test_cell.json')
