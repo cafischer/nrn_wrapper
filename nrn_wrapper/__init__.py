@@ -226,17 +226,19 @@ class Section(nrn.Section):
         stim.dur = dur
         return stim
 
-    def play_current(self, i_amp, t, pos=.5):
+    def play_current(self, i_amp, t, pos=0.5, continuous=False):
         """
         At each time step inject a current equivalent to i_amp at this time step.
         Note: Keep all output variables for NEURON to reference.
 
-        :param: pos: Indicates the position of the IClamp on the Section (number between 0 and 1).
-        :type: pos: float
         :param i_amp: Current injected at each time step in nA.
         :type i_amp: array_like
         :param t: Time at each time step.
         :type t: array_like
+        :param: pos: Indicates the position of the IClamp on the Section (number between 0 and 1).
+        :type: pos: float
+        :param continuous: Use interpolation in adaptive integration methods.
+        :type continuous: bool
         :return: IClamp and the current and time vector (NEURON needs the reference).
         :rtype: h.IClamp, h.Vector, h.Vector
         """
@@ -247,8 +249,8 @@ class Section(nrn.Section):
         i_vec = h.Vector()
         i_vec.from_python(i_amp)
         t_vec = h.Vector()
-        t_vec.from_python(np.concatenate((np.array([0]), t)))  # at time 0 no current is played
-        i_vec.play(stim._ref_amp, t_vec)  # play current into IClamp (use experimental current trace)
+        t_vec.from_python(t)
+        i_vec.play(stim._ref_amp, t_vec, continuous)  # play current into IClamp (use experimental current trace)
         return stim, i_vec, t_vec
 
 
@@ -387,13 +389,13 @@ class Cell(object):
         :param path_variables: List of paths to some variables.
         :type path_variables: list
         """
-        try:
-            for paths in path_variables:
+        for paths in path_variables:
+            try:
                 for path in paths:
                     self.get_attr(path[:-3]).insert(path[-2])  # [-3]: pos (not needed insert into section)
                     # [-2]: mechanism, [-1]: attribute
-        except AttributeError:
-            pass  # let all non mechanism variables pass
+            except AttributeError:
+                pass  # let all non mechanism variables pass
 
     def get_dict(self, geom_type='stylized'):
         cell_dict = dict()
@@ -429,6 +431,8 @@ def iclamp(cell, sec, i_inj, v_init, tstop, dt, celsius=35, pos_i=0.5, pos_v=0.5
     """
     Runs a NEURON simulation of the cell for the given parameters.
 
+    :param sec: List with 1st entry the name of the section and 2nd entry the index (or None in case of soma)
+    :type sec: list[str, int]
     :param i_inj: Amplitude of the injected current for all times t.
     :type i_inj: array_like
     :param v_init: Initial membrane potential of the cell.
@@ -469,6 +473,90 @@ def iclamp(cell, sec, i_inj, v_init, tstop, dt, celsius=35, pos_i=0.5, pos_v=0.5
     h.run()
 
     return np.array(v), np.array(t)
+
+
+def iclamp_adaptive(cell, sec, i_inj, v_init, tstop, dt, celsius=35, pos_i=0.5, pos_v=0.5, atol=1e-2, continuous=True,
+                    discontinuities=None, interpolate=True):
+    """
+    Runs a NEURON simulation of the cell for the given parameters using adaptive integration.
+
+    :param sec: List with 1st entry the name of the section and 2nd entry the index (or None in case of soma)
+    :type sec: list[str, int]
+    :param i_inj: Amplitude of the injected current for all times t.
+    :type i_inj: array_like
+    :param v_init: Initial membrane potential of the cell.
+    :type v_init: float
+    :param tstop: Duration of a whole run.
+    :type tstop: float
+    :param dt: Time step.
+    :type dt: float
+    :param celsius: Temperature during the simulation (affects ion channel kinetics).
+    :type celsius: float
+    :param pos_i: Position of the IClamp on the Section (number between 0 and 1).
+    :type pos_i: float
+    :param pos_v: Position of the recording electrode on the Section (number between 0 and 1).
+    :type pos_v: float
+    :param atol: Absolute tolerance of the integration.
+    :type atol: float
+    :param: continuous: If true, linear interpolation is used to define the values between time points of i_inj.
+    :type: continuous: bool
+    :param: discontinuities: Indices where jumps in i_inj occur. This will insert a new point before each discontinuity
+    in t with the time at the discontinuity and in i_inj with the value from i_inj before the discontinuity.
+    :type discontinuities: array[int]
+    :param interpolate: If true, the recorded values for v and t will be linearly interpolated to match dt.
+    :type interpolate: bool
+    :return: Membrane potential of the cell and time recorded at each time step.
+    :rtype: tuple of three ndarrays
+    """
+    # turn on adaptive integration and set tolerance (only works when stdrun.hoc already loaded)
+    h.cvode_active(1)
+    h.cvode.atol(1e-8)
+
+    section = cell.substitute_section(sec[0], sec[1])
+
+    # time
+    t = np.arange(0, tstop + dt, dt)
+
+    # adapt i_vec to cope with discontinuities
+    if discontinuities is not None:
+        discontinuities = np.sort(discontinuities)
+        discontinuities = discontinuities + np.arange(len(discontinuities))  # index shifts by the amount of already inserted values
+        for discontinuity in discontinuities:
+            i_inj = np.insert(i_inj, discontinuity, i_inj[discontinuity-1])
+            t = np.insert(t, discontinuity, t[discontinuity])
+
+    # insert an IClamp with the current trace from the experiment
+    stim, i_vec, t_vec = section.play_current(i_inj, t, pos_i, continuous=continuous)
+
+    # record the membrane potential
+    v_rec = section.record('v', pos_v)
+    t_rec = h.Vector()
+    t_rec.record(h._ref_t)
+    i_rec = h.Vector()
+    i_rec.record(stim._ref_amp)
+
+    # run simulation
+    h.celsius = celsius
+    h.v_init = v_init
+    h.tstop = tstop
+    h.steps_per_ms = 1 / dt  # change steps_per_ms before dt, otherwise dt not changed properly
+    h.dt = dt
+    h.run()
+
+    v_rec = np.array(v_rec)
+    t_rec = np.array(t_rec)
+    #i_rec = np.array(i_rec)
+
+    if interpolate:
+        #i_rec = np.interp(t, t_rec, i_rec)
+        v_rec = np.interp(t, t_rec, v_rec)
+        t_rec = np.interp(t, t_rec, t_rec)
+
+        t_rec, unique_indices = np.unique(t_rec, return_index=True)  # remove double values (from discontinuities)
+        v_rec = v_rec[unique_indices]  # second value is the right one
+        #i_rec = i_rec[unique_indices]  # second value is the right one
+
+    return v_rec, t_rec #  , i_rec
 
 
 def vclamp(v, t, sec, celsius):

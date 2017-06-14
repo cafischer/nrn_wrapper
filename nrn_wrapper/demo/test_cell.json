@@ -7,32 +7,18 @@
         "mechanisms": {
             "na_ion": {
                 "0.5": {
-                    "ena": 50.0, 
-                    "nai": 10.0, 
-                    "nao": 140.0, 
-                    "dina_dv_": 0.0, 
-                    "ina": 0.0
+                    "ena": 50.0
                 }
             }, 
             "pas": {
                 "0.5": {
-                    "i_pas": 0.0, 
                     "e_pas": -70.0, 
                     "g_pas": 0.001
                 }
             }, 
             "nat": {
                 "0.5": {
-                    "hinf_nat": 0.0, 
-                    "h_nat": 0.0, 
-                    "m_nat": 0.0, 
-                    "gna_nat": 0.0, 
-                    "minf_nat": 0.0, 
-                    "ina_nat": 0.0, 
-                    "vshift_nat": 0.0, 
-                    "gbar_nat": 0.1, 
-                    "htau_nat": 0.0, 
-                    "mtau_nat": 0.0
+                    "gbar_nat": 0.1
                 }
             }
         }, 
@@ -54,7 +40,6 @@
             "mechanisms": {
                 "pas": {
                     "0.5": {
-                        "i_pas": 0.0, 
                         "e_pas": -70.0, 
                         "g_pas": 0.001
                     }
